@@ -1,0 +1,542 @@
+package aps.module_Fusion;
+
+//Java
+import net.minecraft.block.Block;
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.inventory.IInventory;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.tileentity.TileEntity;
+import net.minecraftforge.common.ForgeDirection;
+import net.minecraftforge.liquids.ILiquidTank;
+import net.minecraftforge.liquids.ITankContainer;
+import net.minecraftforge.liquids.LiquidContainerRegistry;
+import net.minecraftforge.liquids.LiquidStack;
+import net.minecraftforge.liquids.LiquidTank;
+import aps.module_Core.GuiIDs;
+import aps.module_Core.InventoryAPS;
+import aps.module_Core.TileEntityAPSPowered;
+import aps.module_Core.module_Core.APSBlockTypes;
+import aps.module_Fusion.ActionFusion.FusionMode;
+import buildcraft.BuildCraftCore;
+import buildcraft.api.core.Position;
+import buildcraft.api.gates.IAction;
+import buildcraft.api.gates.IActionReceptor;
+import buildcraft.api.power.IPowerReceptor;
+import buildcraft.core.IMachine;
+import buildcraft.core.network.PacketPayload;
+import buildcraft.core.network.PacketUpdate;
+import buildcraft.core.network.TileNetworkData;
+import buildcraft.core.triggers.ActionMachineControl.Mode;
+//vanilla includes
+//aps includes
+//buildcraft
+
+
+//Pretty big update here, compare to old TileEntityTokamakGenerator to see changes - Seph
+
+public class TileEntityTokamakGenerator extends TileEntityAPSPowered implements IPowerReceptor, IInventory, ITankContainer, IActionReceptor
+{
+	InventoryAPS Inventory;
+	public int WaterID = Block.waterStill.blockID;
+	public int HeavyWaterID = module_Fusion.heavyWater.itemID;
+	int FuelCapacity = LiquidContainerRegistry.BUCKET_VOLUME * 10; //Updated from BuildCraftAPI -Seph
+	public int FuelLevel = 0; //for GuiDisplay
+	public int FuelType = 0;
+	float FuelTriggerPercentile = 0.5f;
+	int HeavyWaterMult = 10;
+	//static int EnergyToHeatingScalar = 100; //debuging
+	static int EnergyToHeatingScalar = 11; //release
+	//static int EnergyToHeatingScalar = 20; //default
+	int LiquidSideTex = 18;
+	
+	float FusionWaterUse = 0.1f;
+	int FusionBurnTime = 1;
+	int FusionMaxHeatGen = 500;
+	int FusionMaxEnergyGen = 750;
+	int FusionEnergySetGen = 750;
+	
+	int TokamakMaxCoolRate = module_Fusion.CoolRate;
+	int TokamakMaxTemp = module_Fusion.MaxTemp;
+	float TokamakFusionFraction = module_Fusion.FusionFraction;
+	int TokamakFusionTemp = (int) (TokamakMaxTemp * TokamakFusionFraction);
+	float FusionStartTemp = TokamakFusionTemp + (TokamakFusionTemp * 0.01f);
+	static int TokamakMaxEnergyRec = 100; //Limit input, so that another Fusion Reactor can't kick start another reactor too quickly
+	//static int TokamakMaxEnergyRec = 500; //old value
+	int TokamakIdlingBurnDelay = 0;
+	
+	int BurnTimeRemaining;
+	
+	ILiquidTank tank;
+	int LiquidID;
+	
+	//boolean Idling;
+	Object lastMode = Mode.Off;
+	
+	int TokamakTemp;
+	
+	public float PowerIn;
+	public float PowerOut;
+	
+	public TileEntityTokamakGenerator()
+	{
+		super( 0, 16, 19, 17, 0, 1, TokamakMaxEnergyRec, 1, module_Fusion.MaxTemp / EnergyToHeatingScalar, APSBlockTypes.Energy);
+		hasGUI = true;
+		GuiID = GuiIDs.GUI_FUSIONREACTOR;
+		Inventory = new InventoryAPS(1, "tokamakinput");
+		TokamakTemp = 0;
+		BurnTimeRemaining = 0;
+		tank = new LiquidTank(FuelCapacity);
+	}
+	
+	
+	//Changed all fill() methods to new method arguments - Seph
+	@Override
+	public void updateEntity()
+	{
+		if (worldObj.isRemote) return; //client does nothing
+		
+		PowerIn = 0;
+		PowerOut = 0;
+		
+		//Idling = worldObj.isBlockIndirectlyGettingPowered(xCoord, yCoord, zCoord) || lastMode == Mode.Off;
+		
+		ItemStack itemInInventory = Inventory.getStackInSlot(0);
+		
+		if (itemInInventory != null)
+		{
+			LiquidStack liquidId = LiquidContainerRegistry.getLiquidForFilledItem(itemInInventory); //updated to LiquidManager - Seph
+			if (liquidId != null)
+			{
+				if (liquidId.itemID == WaterID)
+				{
+					if (fill(ForgeDirection.UNKNOWN, liquidId, false) == LiquidContainerRegistry.BUCKET_VOLUME)
+					{
+						fill(ForgeDirection.UNKNOWN, liquidId, true);
+	
+						if (itemInInventory.getItem() == Item.bucketWater)
+							Inventory.setInventorySlotContents(0, new ItemStack(Item.bucketEmpty, 1));
+						else 
+							Inventory.decrStackSize(0, 1);
+					}
+				}
+				else if (liquidId.itemID == HeavyWaterID)
+				{
+					if (fill(ForgeDirection.UNKNOWN, liquidId, false) > 0)
+					{
+						fill(ForgeDirection.UNKNOWN, liquidId, true);
+	
+						//Inventory.setInventorySlotContents(0, new ItemStack(Item.bucketEmpty, 1));
+						Inventory.decrStackSize(0, 1);
+					}
+				}
+			}
+		}
+		
+		if (TokamakTemp >= FusionStartTemp)
+		{
+			if (BurnTimeRemaining > 0 && lastMode != Mode.Off)//if it's still burning some fuel
+			{
+				Burn();//go burn that fuel some more
+				if (lastMode == Mode.On)
+				{
+					BurnTimeRemaining--;//and decrease the burn time accordingly
+					TokamakIdlingBurnDelay = 0;
+				}
+				else if (TokamakIdlingBurnDelay == 0)
+				{
+					BurnTimeRemaining--;
+					TokamakIdlingBurnDelay = 10;
+				}
+				else
+					TokamakIdlingBurnDelay--;
+			}
+			else//otherwise
+			{
+				if (tank.getLiquid() != null && tank.getLiquid().amount >= (LiquidContainerRegistry.BUCKET_VOLUME * FusionWaterUse) && lastMode != Mode.Off)//if there's enough fuel
+				{
+					if (tank.getLiquid().itemID == HeavyWaterID)
+						tank.drain((int)((LiquidContainerRegistry.BUCKET_VOLUME / HeavyWaterMult) * FusionWaterUse), true); // More effcient then regular water
+					else
+						tank.drain((int)(LiquidContainerRegistry.BUCKET_VOLUME * FusionWaterUse), true); // Assume it's just regular water
+					
+					
+					BurnTimeRemaining = FusionBurnTime;//and fill up the burn time
+					Burn();
+				}
+			}
+			
+			if (lastMode == Mode.Off)
+			{
+				PowerIn = powerProvider.useEnergy(1, (int) (TokamakMaxEnergyRec / 4f), true);
+				TokamakTemp += PowerIn * EnergyToHeatingScalar;
+			}
+		}
+		else//or if it's not hot enough,
+		{
+			PowerIn = powerProvider.useEnergy(1, TokamakMaxEnergyRec, true);
+			
+			TokamakTemp += PowerIn * EnergyToHeatingScalar;//receive energy and add the equivalent heat to the tokamak
+		}
+		
+		cool();
+		
+		sendNetworkUpdate();
+		
+		//if(lastMode == ActionMachineControl.Mode.On) lastMode = ActionMachineControl.Mode.Off;
+	}
+	
+	void Burn()
+	{
+		if(lastMode == Mode.On)
+		{
+			PowerOutDirection = getPoweredNeighbour();//find a neighbour which can receive power
+			
+			float EnergyGradient = (float)(TokamakTemp - TokamakFusionTemp) / (float)(TokamakMaxTemp - TokamakFusionTemp);//then work out the current energy gradient
+			
+			if (PowerOutDirection != null)//if a power-receiving neighbor exists
+			{									
+				Position pos = new Position (xCoord, yCoord, zCoord, PowerOutDirection); //get the neighbour's position
+				
+				pos.moveForwards(1.0);
+				
+				TileEntity tile = worldObj.getBlockTileEntity((int) pos.x, (int) pos.y, (int) pos.z);
+				
+				IPowerReceptor receptor = (IPowerReceptor) tile;//get it's receptor
+				
+				float extracted = EnergyGradient * FusionMaxEnergyGen;//get how much energy we can give
+				/*
+				 * RawEnergy = TokamakTemp - TokamakFusionTemp
+				 * MaxEnergy = TokamakMaxTemp - TokamakFusionTemp
+				 * Energy = (RawEnergy/MaxEnergy) * FusionMaxEnergyGen
+				 * Result, 0 energy generation at TokamakFusionTemp, FusionMaxEnergyGen (1000) energy generation at TokamakMaxTemp
+				 */
+				if (extracted > 0)//if we can give some
+				{
+					receptor.getPowerProvider().receiveEnergy(extracted, PowerOutDirection);
+					PowerOut = extracted;
+				}
+			}
+			
+			TokamakTemp += (EnergyGradient * FusionMaxHeatGen) + (TokamakMaxCoolRate * ((float) TokamakTemp / (float) TokamakMaxTemp)) + 1;//then heat the tokamak accordingly
+			//if (TokamakTemp < 1) TokamakTemp = 1;
+		} else {
+			TokamakTemp += TokamakMaxCoolRate * TokamakFusionFraction;
+		}
+		//Result, temp levels at TokamakFusionTemp, temp increases by FusionMaxHeatGen at TokamakMaxTemp
+	}
+	
+	private void cool(){
+		if (lastMode == Mode.Off || (lastMode == FusionMode.Idle && TokamakTemp < FusionStartTemp) || tank.getLiquid() == null || tank.getLiquid().amount < (LiquidContainerRegistry.BUCKET_VOLUME * FusionWaterUse)){
+			TokamakTemp -= TokamakMaxCoolRate;// * ((float) TokamakTemp / (float) TokamakMaxTemp); //then apply the natural reactor cooling
+			//System.out.println(TokamakTemp);
+		}
+		//System.out.println(tank.getLiquid() != null ? tank.getLiquid().amount : 0);
+		
+		if (TokamakTemp > TokamakMaxTemp)//make sure the temperature is in range
+			TokamakTemp = TokamakMaxTemp;
+		else if (TokamakTemp < 0)
+			TokamakTemp = 0;
+	}
+	
+	public int powerRequest()
+	{
+		if (TokamakTemp > FusionStartTemp)
+			if(lastMode == Mode.Off && TokamakTemp <= TokamakMaxTemp)
+				return (int) (TokamakMaxEnergyRec / 4f);
+			else
+				return 0;
+		else
+			return TokamakMaxEnergyRec;
+	}
+
+	//@Override
+	public int fill(ForgeDirection from, LiquidStack liquid, boolean doFill) //updated - Seph
+	{
+		if (from.ordinal() > 1)
+		{
+			if(liquid.itemID == WaterID || liquid.itemID == HeavyWaterID)
+				return fill(0, liquid, doFill);
+			
+			return 0;
+		}
+		return 0;
+	}
+	
+	//run regular fill()
+	public int fill(int tankID, LiquidStack liquid, boolean doFill)
+	{
+		this.LiquidID = liquid.itemID;
+		return tank.fill(liquid, doFill);
+	}
+
+	//@Override
+	public LiquidStack drain(ForgeDirection orientation, int maxDrain, boolean doDrain)
+	{
+		return drain(0,maxDrain,doDrain);
+	}
+
+	//run the same as regular drain()
+	public LiquidStack drain(int tankID, int quantityMax, boolean doDrain)
+	{
+		return tank.drain(quantityMax, doDrain);
+	}
+	
+	@Override
+	public void readFromNBT(NBTTagCompound nbttagcompound)
+    {
+    	super.readFromNBT(nbttagcompound);
+		
+    	int fuelID = nbttagcompound.getInteger("liquidid");
+    	if (fuelID > 0)
+    		tank.fill(new LiquidStack(fuelID, nbttagcompound.getInteger("fuellevel")), true);
+    		
+    	//FuelLevel = nbttagcompound.getInteger("fuellevel");
+    	TokamakTemp = nbttagcompound.getInteger("temperature");
+    	BurnTimeRemaining = nbttagcompound.getInteger("burnremaining");
+    	if (nbttagcompound.hasKey("inputslotitem")) {
+    		NBTTagCompound cpt = nbttagcompound.getCompoundTag("inputslotitem"); //dAkshEN3: Changed from 'itemInInventory'. MIGHT HAVE BEEN CAUSE OF CHUNK ERRORS
+    		Inventory.addItemStackToInventory((ItemStack)ItemStack.loadItemStackFromNBT(cpt));
+    	}
+    }
+	
+	@Override
+    public void writeToNBT(NBTTagCompound nbttagcompound) {
+    	super.writeToNBT(nbttagcompound);
+    	
+    	nbttagcompound.setInteger("liquidid", tank.getLiquid() != null ? tank.getLiquid().itemID : 0);
+		nbttagcompound.setInteger("fuellevel", tank.getLiquid() != null ? tank.getLiquid().amount : 0);
+    	nbttagcompound.setInteger("temperature", TokamakTemp);
+    	nbttagcompound.setInteger("burnremaining", BurnTimeRemaining);
+    	
+    	if (Inventory.getStackInSlot(0) != null) {
+    		NBTTagCompound cpt = new NBTTagCompound();
+    		Inventory.getStackInSlot(0).writeToNBT(cpt);
+    		nbttagcompound.setTag("inputslotitem", cpt);
+    	}
+	}
+	
+	//Temporary
+	/*public void setCapacity(int capacity)
+	{
+		FuelCapacity = capacity;
+	}*/
+	
+	public IInventory getInventory() {return Inventory;}
+	
+	public float getScaledLiquidQuantity(int MaxLevel) {
+		return ((float) FuelLevel / (float) FuelCapacity) * MaxLevel;
+	}
+	
+	public float getScaledTemp(int MaxLevel) {return ((float) TokamakTemp / (float) TokamakMaxTemp) * MaxLevel;}
+	
+	public float getScaledFusionTemp(int MaxLevel) {return ((float) TokamakFusionTemp / (float) TokamakMaxTemp) * MaxLevel;}
+	
+	public float getScaledPower(boolean InputOutput, int MaxLevel)
+	{
+		if (InputOutput)
+			return (PowerOut / FusionMaxEnergyGen) * MaxLevel;
+		else
+			return (PowerIn / TokamakMaxEnergyRec) * MaxLevel;
+	}
+	
+	public int getPowerOut(){
+		return FusionEnergySetGen;
+	}
+	
+	boolean isFusing()
+	{
+		if (TokamakTemp > FusionStartTemp)
+			return true;
+		else
+			return false;
+	}
+	
+	boolean isIdling() {return lastMode == FusionMode.Idle;}
+
+
+	@Override
+	public void kill() {}
+
+	/*@Override
+	public LinkedList<ITrigger> getPipeTriggers(IPipe pipe) {return null;}
+
+	@Override
+	public LinkedList<ITrigger> getNeighborTriggers(Block block, TileEntity tile)
+	{
+		LinkedList<ITrigger> triggers = new LinkedList<ITrigger>();
+		
+		if(tile instanceof TileEntityTokamakGenerator)
+		{
+			triggers.add(module_Fusion.tokamakIdlingTrigger);
+			triggers.add(module_Fusion.tokamakOutputQuaterTrigger);
+			triggers.add(module_Fusion.tokamakOutputHalfTrigger);
+			triggers.add(module_Fusion.tokamakOutput3QuatersTrigger);
+			triggers.add(module_Fusion.tokamakOutputMaxTrigger);
+			triggers.add(module_Fusion.tokamakTempReachedTrigger);
+		}
+		
+		return triggers;
+	}*/
+	
+	/*@Override
+	public LinkedList<ITrigger> getTriggers()
+	{
+		LinkedList<ITrigger> triggers = new LinkedList<ITrigger>();
+		//Inventory
+		triggers.add(BuildCraftCore.triggerEmptyInventory);
+		triggers.add(BuildCraftCore.triggerContainsInventory);
+		triggers.add(BuildCraftCore.triggerSpaceInventory);
+		triggers.add(BuildCraftCore.triggerFullInventory);
+		//Liquid
+		triggers.add(BuildCraftCore.triggerEmptyLiquid);
+		triggers.add(BuildCraftCore.triggerContainsLiquid);
+		triggers.add(BuildCraftCore.triggerSpaceLiquid);
+		triggers.add(BuildCraftCore.triggerFullLiquid);
+		//APS triggers
+		triggers.add(module_Fusion.tokamakIdlingTrigger);
+		triggers.add(module_Fusion.tokamakOutputQuaterTrigger);
+		triggers.add(module_Fusion.tokamakOutputHalfTrigger);
+		triggers.add(module_Fusion.tokamakOutput3QuatersTrigger);
+		triggers.add(module_Fusion.tokamakOutputMaxTrigger);
+		triggers.add(module_Fusion.tokamakTempReachedTrigger);
+		return triggers;
+	}*/
+
+	/*@Override
+	public boolean isActive() { return isFusing(); }
+
+	@Override
+	public boolean manageLiquids() {return true;}
+
+	@Override
+	public boolean manageSolids() {return false;}
+
+	@Override
+	public boolean allowActions() {return true;}*/
+
+	//@Override
+	public void actionActivated(IAction action) {
+		if (action == BuildCraftCore.actionOn) {
+			lastMode = Mode.On;
+		} else if (action == BuildCraftCore.actionOff) {
+			lastMode = Mode.Off;	
+		} else if (action == module_Fusion.fusionActionIdle){
+			lastMode = FusionMode.Idle;
+		}
+	}
+	
+	@Override
+	public int getSizeInventory() {
+		return Inventory.getSizeInventory();
+	}
+
+	@Override
+	public ItemStack getStackInSlot(int i) {
+		return Inventory.getStackInSlot(i);
+	}
+
+	@Override
+	public ItemStack decrStackSize(int i, int j) {
+		return Inventory.decrStackSize(i, j);
+	}
+
+	@Override
+	public void setInventorySlotContents(int i, ItemStack itemstack) {
+		Inventory.setInventorySlotContents(i, itemstack);
+	}
+
+	@Override
+	public String getInvName() {
+		return Inventory.getInvName();
+	}
+
+	@Override
+	public int getInventoryStackLimit() {
+		return Inventory.getInventoryStackLimit();
+	}
+
+	@Override
+	public boolean isUseableByPlayer(EntityPlayer entityplayer) {
+		return Inventory.isUseableByPlayer(entityplayer);
+	}
+
+	@Override
+	public void openChest() {
+		Inventory.openChest();
+	}
+
+	@Override
+	public void closeChest() {
+		Inventory.closeChest();
+	}
+
+	@Override
+	public ItemStack getStackInSlotOnClosing(int var1) {
+		return null;
+	}
+
+	@Override
+	public ILiquidTank[] getTanks(ForgeDirection direction) {
+		return new ILiquidTank[] { tank };
+	}
+	
+	@Override
+	public ILiquidTank getTank(ForgeDirection direction, LiquidStack liquidstack)
+	{
+		return this.tank;
+	}
+	
+	// -- Networking -- //
+	
+	public PacketPayload getPacketPayload()
+	{
+		PacketPayload payload = new PacketPayload(4, 2, 0);
+			//tank
+			if (tank.getLiquid() != null){
+				payload.intPayload[0] = tank.getLiquid().itemID;
+				payload.intPayload[1] = tank.getLiquid().amount;
+			}else{
+				payload.intPayload[0] = 0;
+				payload.intPayload[1] = 0;
+			}
+			//Idling and temp
+			//payload.intPayload[2] = Idling ? 1 : 0;
+			payload.intPayload[3] = TokamakTemp;
+			//power in and out
+			payload.floatPayload[0] = PowerIn;
+			payload.floatPayload[1] = PowerOut;
+		return payload;
+	}
+	
+	public void handleUpdatePacket(PacketUpdate packet)
+	{
+		/*if (packet.payload.intPayload[0] > 0) { //is there liquid in the tank?
+			//LiquidStack liquid = new LiquidStack(packet.payload.intPayload[0], packet.payload.intPayload[1]);
+			//tank.setLiquid(liquid);
+			
+		}else {
+			tank.drain(tank.getCapacity(), true);
+		}*/
+		
+		FuelType = packet.payload.intPayload[0];
+		FuelLevel = packet.payload.intPayload[1];
+		
+		//Idling = packet.payload.intPayload[2] == 1 ? true : false;
+		TokamakTemp = packet.payload.intPayload[3];
+		
+		PowerIn = packet.payload.floatPayload[0];
+		PowerOut = packet.payload.floatPayload[1];
+	}
+	
+	public void handleUpdateMessage(UpdateMessage message)
+	{
+		this.FusionEnergySetGen = message.userPower;
+	}
+	
+	public static class UpdateMessage {
+		@TileNetworkData
+		public int userPower;
+	}
+}

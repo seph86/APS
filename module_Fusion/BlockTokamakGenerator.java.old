@@ -1,0 +1,44 @@
+package net.minecraft.src.aps.module_Fusion;
+
+import java.util.ArrayList;
+
+import net.minecraft.src.*;
+import net.minecraft.src.aps.module_Core.BlockAPS;
+import net.minecraft.src.aps.module_Core.TileEntityAPS;
+import net.minecraft.src.aps.module_Core.module_Core;
+import net.minecraft.src.aps.module_DebugMachines.TileEntityEnergyDrain;
+import net.minecraft.src.forge.*;
+
+public class BlockTokamakGenerator extends BlockAPS implements ITextureProvider
+{	
+	public BlockTokamakGenerator(int i)
+    {
+        super(i, Material.iron);
+    }
+    
+    @Override
+	public TileEntity getBlockEntity()
+    {
+    	return new TileEntityTokamakGenerator();
+	}
+    
+    @Override
+    public boolean blockActivated(World world, int i, int j, int k, EntityPlayer entityplayer)
+    {
+    	TileEntityTokamakGenerator tokamak = (TileEntityTokamakGenerator) world.getBlockTileEntity(i, j, k);
+    	if (tokamak != null)
+    	{
+    		//ModLoader.OpenGUI(entityplayer, new GuiTokamakGenerator(tokamak.getInventory(), tokamak, entityplayer.inventory));
+    		return true;
+    	}
+    	else
+    		return false;
+    }
+    
+    public ArrayList<ItemStack> getBlockDropped(World world, int X, int Y, int Z, int metadata, int fortune)
+    {
+    	ArrayList<ItemStack> L = new ArrayList<ItemStack>();
+    	L.add(new ItemStack(module_Core.APSMetaBlock, 1, 8));
+    	return L;
+    }
+}

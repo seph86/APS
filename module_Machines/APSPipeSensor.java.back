@@ -1,0 +1,147 @@
+package aps.module_Machines;
+
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraftforge.common.ForgeDirection;
+import aps.core.network.APSPacketUpdate;
+import aps.core.staticVariables.APSPacketIDs;
+import buildcraft.core.DefaultProps;
+import buildcraft.core.network.BuildCraftPacket;
+import buildcraft.core.network.PacketPayload;
+import buildcraft.core.network.TileNetworkData;
+import buildcraft.core.network.TilePacketWrapper;
+import buildcraft.core.proxy.CoreProxy;
+import buildcraft.transport.Pipe;
+import buildcraft.transport.PipeTransportPower;
+import buildcraft.transport.pipes.PipeLogicWood;
+
+public class APSPipeSensor extends Pipe {
+
+	int sourceSide = -1;
+	
+	public int powerDraw = 0;
+	
+	public int powerStates[] = {0,0,0,0};
+	
+	//private APSPacketUpdate oldpacket;
+	
+	public static TilePacketWrapper updateMessageWrapper = new TilePacketWrapper(updateMessage.class);
+	
+	public APSPipeSensor(int itemID) {
+		super(new PipeTransportPower(), new PipeLogicWood(), itemID);
+		((PipeTransportPower) transport).powerResistance = 0.005;
+	}
+
+	@Override
+	public String getTextureFile() {
+		return DefaultProps.TEXTURE_BLOCKS;
+	}
+
+	@Override
+	public int getTextureIndex(ForgeDirection direction) {
+		return 7 * 16 + 9;
+	}
+	
+	@Override
+	public void updateEntity(){
+		super.updateEntity();
+		//System.out.println(Arrays.toString(((PipeTransportPower)transport).powerQuery));
+		
+		if (worldObj.isRemote) return;
+		
+		powerDraw = 0;
+		
+		if (sourceSide > -1) {
+			//each 3axis directions
+			for (int d = 0; d < 6; d++){
+				if (d != sourceSide) {
+					powerDraw += ((PipeTransportPower)transport).powerQuery[d];
+				}
+			}
+		}
+		
+		sendNetworkUpdate();
+	}
+	
+	public void sendNetworkUpdate() {
+		updateMessage message = new updateMessage();
+		
+		message.SourceSide = this.sourceSide;
+		
+		message.state1 = this.powerStates[0];
+		message.state2 = this.powerStates[1];
+		message.state3 = this.powerStates[2];
+		message.state4 = this.powerStates[3];
+		
+
+		
+		PacketPayload payload = APSPipeSensor.updateMessageWrapper.toPayload(this.xCoord, this.yCoord, this.zCoord, message);
+		
+		APSPacketUpdate packet = new APSPacketUpdate(APSPacketIDs.UPDATE_PIPESENSOR, payload);
+			packet.posX = this.xCoord;
+			packet.posY = this.yCoord;
+			packet.posZ = this.zCoord;
+		
+		//if (oldpacket == null || !oldpacket.equals(packet)) {
+			//CoreProxy.proxy.sendToPlayer(player, packet.getPacket());
+				CoreProxy.proxy.sendToPlayers(packet.getPacket(), this.worldObj, xCoord, yCoord, zCoord, DefaultProps.NETWORK_UPDATE_RANGE);
+				//EntityPlayerMP playerMP = (EntityPlayerMP) player;
+				//playerMP.playerNetServerHandler.sendPacketToPlayer(packet.getPacket());
+				//oldpacket = packet;
+		//}
+			
+	}
+	
+	public void handleUpdateMessage(updateMessage message){
+		this.sourceSide = message.SourceSide;
+		
+		this.powerStates[0] = message.state1;
+		this.powerStates[1] = message.state2;
+		this.powerStates[2] = message.state3;
+		this.powerStates[3] = message.state4;
+	}
+	
+	public static class updateMessage {
+		@TileNetworkData
+		public int SourceSide;
+		
+		@TileNetworkData
+		public int state1;
+		
+		@TileNetworkData
+		public int state2;
+		
+		@TileNetworkData
+		public int state3;
+		
+		@TileNetworkData
+		public int state4;
+	}
+	
+	public static class PipeSensorUpdatePacket extends BuildCraftPacket
+	{
+
+		@Override
+		public int getID() {
+			// TODO Auto-generated method stub
+			return 0;
+		}
+
+		@Override
+		public void readData(DataInputStream data) throws IOException {
+			// TODO Auto-generated method stub
+			
+		}
+
+		@Override
+		public void writeData(DataOutputStream data) throws IOException {
+			// TODO Auto-generated method stub
+			
+		}
+		
+	}
+}

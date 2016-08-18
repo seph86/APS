@@ -1,0 +1,23 @@
+package net.minecraft.src.aps.module_Fusion;
+
+import net.minecraft.src.*;
+import net.minecraft.src.aps.module_Core.InventoryAPS;
+
+import java.util.List;
+
+public class InventoryTokamakGenerator extends InventoryAPS implements IInventory
+{
+	public ItemStack[] InputSlot;
+	public boolean inventoryChanged;
+    public int currentItem;
+	
+	public InventoryTokamakGenerator()
+	{
+		super(1);
+	}
+	
+	public String getInvName()
+    {
+        return "Tokamak Input Slot";
+    }
+}

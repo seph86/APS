@@ -1,0 +1,19 @@
+package net.minecraft.src.aps.module_Solar;
+
+import net.minecraft.src.*;
+import net.minecraft.src.aps.module_Core.BlockAPS;
+import net.minecraft.src.forge.*;
+
+public class BlockSolarCollector extends BlockAPS implements ITextureProvider
+{	
+    public BlockSolarCollector(int i)
+    {
+        super(i, Material.iron);
+    }
+    
+    @Override
+	public TileEntity getBlockEntity()
+    {
+    	return new TileEntitySolarCollector();
+	}
+}

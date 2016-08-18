@@ -1,0 +1,119 @@
+package aps.module_Converter;
+
+import java.util.LinkedList;
+
+import buildcraft.BuildCraftCore;
+import buildcraft.api.gates.IAction;
+import buildcraft.api.gates.IActionReceptor;
+import buildcraft.api.gates.IOverrideDefaultTriggers;
+import buildcraft.api.gates.ITrigger;
+import buildcraft.api.power.IPowerProvider;
+import buildcraft.api.power.IPowerReceptor;
+import buildcraft.core.IMachine;
+import buildcraft.core.triggers.ActionMachineControl;
+import net.minecraft.src.TileEntity;
+//import ic2.api.Direction;
+//import ic2.api.IEnergyEmitter;
+//import ic2.api.IEnergySource;
+import aps.module_Core.TileEntityAPSPowered;
+import aps.module_Core.module_Core.APSBlockTypes;
+
+public class TileEntityICEProduction extends TileEntityAPSPowered implements IEnergySource, IMachine, IActionReceptor, IOverrideDefaultTriggers, IPowerReceptor {
+
+	private static int maxStoredPower = 500;
+	private static int textureIndex = (7 * 16);
+	
+	private int energyOutput = 0;
+	
+	boolean idling = false;
+	ActionMachineControl.Mode state = ActionMachineControl.Mode.Unknown;
+	
+	
+	
+	public TileEntityICEProduction() {
+		super(0, textureIndex, textureIndex + 1, 2, 0, 5, maxStoredPower, 1 , maxStoredPower, APSBlockTypes.Machine);
+	}
+
+	@Override
+	public void updateEntity()
+	{
+		super.updateEntity();
+		idling = worldObj.isBlockIndirectlyGettingPowered(xCoord, yCoord, zCoord) || state == ActionMachineControl.Mode.Off;  
+		
+		if (!idling){
+			float energy = powerProvider.useEnergy(1, maxStoredPower, true);
+			energyOutput = (int)energy * module_Converter.ICEnergyOutput;
+		}
+			
+	}
+	
+	@Override
+	public void kill() { }
+
+	@Override
+	public boolean isAddedToEnergyNet() {
+		return false;
+	}
+
+	@Override
+	public boolean emitsEnergyTo(TileEntity receiver, Direction direction) {
+		//Cannot output power from the top
+		if (direction == Direction.YP)
+			return false;
+		else
+			return true;
+	}
+
+	@Override
+	public int getMaxEnergyOutput() {
+		return energyOutput;
+	}
+	
+	
+	@Override
+	public LinkedList<ITrigger> getTriggers() {
+		LinkedList<ITrigger> triggers = new LinkedList<ITrigger>();
+		
+		triggers.add(BuildCraftCore.triggerMachineActive);
+		triggers.add(BuildCraftCore.triggerMachineInactive);
+		
+		return triggers;
+	}
+
+	@Override
+	public boolean isActive() {
+		return !idling;
+	}
+
+	@Override
+	public boolean manageLiquids() {
+		return false;
+	}
+
+	@Override
+	public boolean manageSolids() {
+		return false;
+	}
+
+	@Override
+	public boolean allowActions() {
+		return false;
+	}
+
+	@Override
+	public int powerRequest() {
+		if (!idling)
+			return getPowerProvider().getMaxEnergyReceived();
+		else 
+			return 0;
+	}
+
+	@Override
+	public void actionActivated(IAction action) {
+		if (action == BuildCraftCore.actionOn)
+			state = ActionMachineControl.Mode.On;
+		else if (action == BuildCraftCore.actionOff)
+			state = ActionMachineControl.Mode.Off;
+	
+	}
+}
